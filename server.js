@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Briefcase, User, MapPin, Hash, Plus, ArrowLeft, MoreVertical, Paperclip, CheckCircle, Clock, AlertTriangle, ChevronDown, Download, Send, X, Edit, Loader2, Info } from 'lucide-react';
 
-const API_BASE_URL = 'https://your-render-backend-url.onrender.com'; // <-- IMPORTANT: CHANGE THIS
+const API_BASE_URL = 'postgresql://site_app_postgresql_user:JvW8L9ch55nSB4NVxAkTOIR0UDT71wC8@dpg-d1e5l56r433s73cc7nig-a.frankfurt-postgres.render.com/site_app_postgresql'; // <-- IMPORTANT: CHANGE THIS
 
 // Helper to manage API calls
 const api = {
