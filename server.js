@@ -1,207 +1,185 @@
-import React, { useState, useEffect } from 'react';
-import { Mail, Briefcase, User, MapPin, Hash, Plus, ArrowLeft, MoreVertical, Paperclip, CheckCircle, Clock, AlertTriangle, ChevronDown, Download, Send, X, Edit, Loader2, Info } from 'lucide-react';
+// File: server.js
+// Instructions: Deploy this file to a Node.js service like Render.
+// You will also need to create a PostgreSQL database and run the SQL commands below.
+// You must set the DATABASE_URL and JWT_SECRET environment variables in your Render service.
 
-const API_BASE_URL = 'postgresql://site_app_postgresql_user:JvW8L9ch55nSB4NVxAkTOIR0UDT71wC8@dpg-d1e5l56r433s73cc7nig-a.frankfurt-postgres.render.com/site_app_postgresql'; // <-- IMPORTANT: CHANGE THIS
+const express = require('express');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { Pool } = require('pg');
 
-// Helper to manage API calls
-const api = {
-    get: async (path, token) => {
-        const res = await fetch(`${API_BASE_URL}${path}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
-    },
-    post: async (path, body, token) => {
-        const headers = { 'Content-Type': 'application/json' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-        const res = await fetch(`${API_BASE_URL}${path}`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(body)
-        });
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
-    },
-    // You would add put, delete methods here as well
+const app = express();
+const port = process.env.PORT || 3001;
+
+// --- DATABASE SETUP ---
+// Use the DATABASE_URL environment variable provided by Render.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
+// --- MIDDLEWARE ---
+app.use(cors());
+app.use(express.json()); // To parse JSON bodies
+
+// Middleware to authenticate JWT token
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+    if (token == null) return res.sendStatus(401); // if no token, unauthorized
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403); // if token is no longer valid
+        req.user = user.user; // Set req.user to the payload inside the token
+        next();
+    });
 };
 
 
-// Main App Component
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(() => localStorage.getItem('token')); // Load token from storage
-  const [currentPage, setCurrentPage] = useState('login');
-  const [projects, setProjects] = useState([]);
-  const [selectedProject, setSelectedProject] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+// --- API ROUTES ---
 
-  // Effect to validate token on app load
-  useEffect(() => {
-    const savedToken = localStorage.getItem('token');
-    const savedUser = localStorage.getItem('user');
-    if (savedToken && savedUser) {
-        setToken(savedToken);
-        setUser(JSON.parse(savedUser));
-        setCurrentPage('projects');
+// 1. AUTHENTICATION
+app.post('/api/register', async (req, res) => {
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) {
+        return res.status(400).json({ error: 'All fields are required' });
     }
-    setIsLoading(false);
-  }, []);
-
-  const handleLogin = async (credentials) => {
-      try {
-          const { token, user } = await api.post('/api/login', credentials);
-          setToken(token);
-          setUser(user);
-          localStorage.setItem('token', token);
-          localStorage.setItem('user', JSON.stringify(user));
-          setCurrentPage('projects');
-      } catch (error) {
-          console.error("Login failed:", error);
-          // Here you would show an error message to the user
-      }
-  };
-  
-  const handleLogout = () => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setCurrentPage('login');
-  };
-  
-  const renderPage = () => {
-    if (isLoading) {
-        return <div className="flex justify-center items-center min-h-screen"><Loader2 className="animate-spin" size={48} /></div>
+    try {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = await pool.query(
+            "INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING id, name, email",
+            [name, email, hashedPassword]
+        );
+        res.status(201).json(newUser.rows[0]);
+    } catch (err) {
+        console.error(err.message);
+        if (err.code === '23505') { // Unique violation
+            return res.status(400).json({ error: 'Email already in use.' });
+        }
+        res.status(500).send('Server error');
     }
-    switch (currentPage) {
-      case 'login':
-        return <LoginPage onLogin={handleLogin} />;
-      case 'projects':
-        return user ? <ProjectsPage user={user} token={token} onSelectProject={(p) => { setSelectedProject(p); setCurrentPage('projectDetails'); }} onLogout={handleLogout} /> : <LoginPage onLogin={handleLogin} />;
-      case 'projectDetails':
-        return selectedProject ? <ProjectDetailsPage user={user} token={token} project={selectedProject} onBack={() => setCurrentPage('projects')} /> : <ProjectsPage user={user} token={token} onSelectProject={(p) => { setSelectedProject(p); setCurrentPage('projectDetails'); }} onLogout={handleLogout} />;
-      default:
-        return <LoginPage onLogin={handleLogin} />;
+});
+
+app.post('/api/login', async (req, res) => {
+    const { email, password } = req.body;
+    try {
+        const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        if (userResult.rows.length === 0) {
+            return res.status(400).json({ error: 'Invalid credentials' });
+        }
+        
+        const user = userResult.rows[0];
+        const isMatch = await bcrypt.compare(password, user.password);
+
+        if (!isMatch) {
+            return res.status(400).json({ error: 'Invalid credentials' });
+        }
+
+        const payload = { user: { id: user.id, name: user.name, email: user.email } };
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+        res.json({ token, user: payload.user });
+
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server error');
     }
-  };
-
-  return <div className="bg-gray-50 min-h-screen font-sans">{renderPage()}</div>;
-}
+});
 
 
-// Page Components (Updated to use API calls)
-
-function ProjectsPage({ user, token, onSelectProject, onLogout }) {
-    const [projects, setProjects] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-
-    useEffect(() => {
-        const fetchProjects = async () => {
-            try {
-                const data = await api.get('/api/projects', token);
-                setProjects(data);
-            } catch (error) {
-                console.error("Failed to fetch projects", error);
-                // Handle error, e.g., redirect to login if unauthorized
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchProjects();
-    }, [token]);
-
-    if (isLoading) {
-        return <div className="flex justify-center items-center min-h-screen"><Loader2 className="animate-spin" size={48} /></div>
+// 2. PROJECTS (Protected Route)
+app.get('/api/projects', authenticateToken, async (req, res) => {
+    try {
+        // Only get projects created by the logged-in user
+        const projects = await pool.query("SELECT * FROM projects WHERE user_id = $1 ORDER BY created_at DESC", [req.user.id]);
+        res.json(projects.rows);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server error');
     }
+});
 
-    return (
-        <div className="max-w-4xl mx-auto p-4 md:p-6">
-            <header className="flex justify-between items-center mb-6">
-                <div>
-                    <h1 className="text-3xl font-bold text-gray-900">Projects</h1>
-                    <p className="text-gray-600">Welcome back, {user?.name}!</p>
-                </div>
-                <div className="flex items-center gap-4">
-                    {/* Add Create Project Button and Modal Here */}
-                    <Button onClick={onLogout} variant="secondary">Logout</Button>
-                </div>
-            </header>
-            <div className="space-y-4">
-                {projects.map(project => (
-                    <Card key={project.id} className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => onSelectProject(project)}>
-                        <div className="p-5">
-                             <h3 className="text-xl font-semibold text-blue-700">{project.name}</h3>
-                             <p className="text-sm text-gray-500 mt-1">#{project.number}</p>
-                        </div>
-                    </Card>
-                ))}
-            </div>
-        </div>
-    );
-}
-
-function ProjectDetailsPage({ user, token, project, onBack }) {
-    const [snags, setSnags] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-    
-    useEffect(() => {
-        const fetchSnags = async () => {
-            try {
-                const data = await api.get(`/api/projects/${project.id}/snags`, token);
-                setSnags(data);
-            } catch (error) {
-                console.error("Failed to fetch snags", error);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        fetchSnags();
-    }, [project.id, token]);
-    
-    // PDF and other functionality remains the same, but would use the `snags` state
-    
-    if (isLoading) {
-        return <div className="flex justify-center items-center min-h-screen"><Loader2 className="animate-spin" size={48} /></div>
+app.post('/api/projects', authenticateToken, async (req, res) => {
+    const { name, number, location } = req.body;
+    try {
+        const newProject = await pool.query(
+            "INSERT INTO projects (name, number, location, user_id) VALUES ($1, $2, $3, $4) RETURNING *",
+            [name, number, location, req.user.id]
+        );
+        res.status(201).json(newProject.rows[0]);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server error');
     }
+});
 
-    // This is a simplified view. The full details, buttons, modals, and PDF generation
-    // logic from the previous version would be integrated here.
-    return (
-        <div className="max-w-5xl mx-auto p-4 md:p-6">
-             <header className="mb-6">
-                <Button onClick={onBack} variant="secondary"><ArrowLeft size={16} className="mr-2" />Back to Projects</Button>
-            </header>
-             <main className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-1">
-                    <Card>
-                        <div className="p-5">
-                            <h2 className="text-2xl font-bold text-gray-900 mb-4">{project.name}</h2>
-                             <p>Number: {project.number}</p>
-                             <p>Location: {project.location}</p>
-                        </div>
-                    </Card>
-                </div>
-                <div className="lg:col-span-2">
-                    <h3 className="text-2xl font-bold text-gray-900 mb-4">Snag Reports</h3>
-                     <div className="space-y-4">
-                        {snags.map(snag => (
-                            <Card key={snag.id}>
-                               <div className="p-5">
-                                    <h4 className="font-semibold">{snag.title}</h4>
-                                    <p>{snag.description}</p>
-                                    <StatusBadge status={snag.status} />
-                               </div>
-                            </Card>
-                        ))}
-                    </div>
-                </div>
-            </main>
-        </div>
-    );
-}
+// 3. SNAGS (Protected Route)
+app.get('/api/projects/:projectId/snags', authenticateToken, async (req, res) => {
+    try {
+        const snags = await pool.query("SELECT * FROM snags WHERE project_id = $1 ORDER BY created_at DESC", [req.params.projectId]);
+        res.json(snags.rows);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server error');
+    }
+});
 
-// NOTE: The LoginPage, forms, modals, and other components would also need to be updated
-// to use API calls instead of manipulating local state directly. This example focuses on
-// the core architectural change of fetching data from the new backend.
-// Other components like LoginPage, StatusBadge, Card, Button, etc., remain the same as before.
+
+app.post('/api/projects/:projectId/snags', authenticateToken, async (req, res) => {
+    const { title, description, assignedTo, status, image } = req.body;
+    try {
+        const newSnag = await pool.query(
+            "INSERT INTO snags (project_id, title, description, assigned_to, status, image_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+            [req.params.projectId, title, description, assignedTo, status, image]
+        );
+        res.status(201).json(newSnag.rows[0]);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server error');
+    }
+});
+
+
+// --- SERVER START ---
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
+
+
+/*
+-- DATABASE SCHEMA (PostgreSQL)
+-- Instructions: Run these SQL commands in your PostgreSQL database to create the required tables.
+
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE projects (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    name VARCHAR(255) NOT NULL,
+    number VARCHAR(100),
+    location TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE snags (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    status VARCHAR(50) NOT NULL DEFAULT 'open',
+    assigned_to VARCHAR(100),
+    image_url TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+*/
