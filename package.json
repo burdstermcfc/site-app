@@ -1,28 +1,22 @@
 {
-  "name": "site-app",
+  "name": "site-reporter-backend",
   "version": "1.0.0",
-  "main": "app.js",
+  "description": "Backend for the site reporter application",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/burdstermcfc/site-app.git"
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.12.0"
+  },
+  "engines": {
+    "node": "18.x"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/burdstermcfc/site-app/issues"
-  },
-  "homepage": "https://github.com/burdstermcfc/site-app#readme",
-  "description": "",
-  "dependencies": {
-    "bcryptjs": "^3.0.2",
-    "cors": "^2.8.5",
-    "express": "^5.1.0",
-    "jsonwebtoken": "^9.0.2",
-    "pg": "^8.16.2"
-  }
+  "license": "ISC"
 }
